@@ -21,3 +21,14 @@ As a complete example, we ask a simple question about [one of the example images
 ```
 python3 main.py --model gemma3 --prompt "Are there any animals in this image?" examples/animal.jpg
 ```
+
+## Docker Notes
+
+`ffmpeg` is installed in the Docker image, which is required for `--use-lab-camera` (RTSP frame capture).
+
+You can verify it after building:
+
+```bash
+docker build -t ollama-hello-world:local .
+docker run --rm ollama-hello-world:local ffmpeg -version
+```
