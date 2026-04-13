@@ -12,6 +12,7 @@ The app takes the following arguments:
 * `--host`: Specify Ollama runtime host. (Default is `ollama` for WES compatibility. Can also provide using `OLLAMA_HOST` environment variable.)
 * `-m / --model`: Model to process images with.
 * `-p / --prompt`: Prompt to process images with.
+* `--use-lab-camera`: Capture one frame from the lab RTSP camera with `ffmpeg` and include it in processing.
 
 The remainder of the arguments are paths to images that will be processes.
 

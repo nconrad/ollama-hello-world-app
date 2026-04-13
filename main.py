@@ -1,18 +1,23 @@
 import argparse
 import ollama
-from pathlib import Path
 import json
 from waggle.plugin import Plugin
 import logging
 import os
 import base64
+import subprocess
 from urllib.parse import urlparse
+
+
+LAB_CAMERA_RTSP_URL = "rtsp://sage:MySageCamera@10.31.81.27:554/profile2/media.smp"
 
 
 def get_image_data(image_uri: str) -> bytes:
     scheme = urlparse(image_uri).scheme
     if scheme in ["http", "https"]:
         return get_image_data_http(image_uri)
+    if scheme == "rtsp":
+        return get_image_data_rtsp(image_uri)
     return get_image_data_file(image_uri)
 
 
@@ -33,7 +38,33 @@ def get_image_data_file(image_uri: str) -> bytes:
         return f.read()
 
 
-def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[Path]):
+def get_image_data_rtsp(image_uri: str) -> bytes:
+    """Capture one frame from an RTSP camera URL using ffmpeg and return image bytes."""
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-rtsp_transport",
+            "tcp",
+            "-i", image_uri,
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "-",
+        ],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode != 0 or not result.stdout:
+        ffmpeg_err = result.stderr.decode(errors="replace")
+        raise RuntimeError(f"ffmpeg failed: {ffmpeg_err}")
+    return result.stdout
+
+
+def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str]):
     logging.info("Running: model=%r and prompt=%r", model, prompt)
 
     client = ollama.Client(host=host)
@@ -95,6 +126,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p", "--prompt", default="Describe this image.", help="prompt to use"
     )
+    parser.add_argument(
+        "--use-lab-camera",
+        action="store_true",
+        help="capture one frame from the lab RTSP camera and process it",
+    )
     parser.add_argument("images", nargs="*", help="images to process")
     args = parser.parse_args()
 
@@ -104,11 +140,19 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    images = list(args.images)
+
+    if args.use_lab_camera:
+        images.append(LAB_CAMERA_RTSP_URL)
+
+    if not images:
+        parser.error("Provide at least one image path or pass --use-lab-camera")
+
     with Plugin() as plugin:
         run(
             plugin=plugin,
             host=args.host,
             model=args.model,
             prompt=args.prompt,
-            images=args.images,
+            images=images,
         )
