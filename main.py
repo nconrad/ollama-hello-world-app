@@ -2,14 +2,11 @@ import argparse
 import ollama
 import json
 from waggle.plugin import Plugin
+from waggle.data.vision import Camera
 import logging
 import os
 import base64
-import subprocess
 from urllib.parse import urlparse
-
-
-LAB_CAMERA_RTSP_URL = "rtsp://sage:MySageCamera@10.31.81.27:554/profile2/media.smp"
 
 
 def get_image_data(image_uri: str) -> bytes:
@@ -17,7 +14,7 @@ def get_image_data(image_uri: str) -> bytes:
     if scheme in ["http", "https"]:
         return get_image_data_http(image_uri)
     if scheme == "rtsp":
-        return get_image_data_rtsp(image_uri)
+        return get_image_data_stream(image_uri)
     return get_image_data_file(image_uri)
 
 
@@ -38,39 +35,28 @@ def get_image_data_file(image_uri: str) -> bytes:
         return f.read()
 
 
-def get_image_data_rtsp(image_uri: str) -> bytes:
-    """Capture one frame from an RTSP camera URL using ffmpeg and return image bytes."""
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-rtsp_transport",
-            "tcp",
-            "-i", image_uri,
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "-",
-        ],
-        capture_output=True,
-        timeout=10,
-    )
-    if result.returncode != 0 or not result.stdout:
-        ffmpeg_err = result.stderr.decode(errors="replace")
-        raise RuntimeError(f"ffmpeg failed: {ffmpeg_err}")
-    return result.stdout
+def get_image_data_stream(stream_uri: str) -> bytes:
+    """Capture one frame from an RTSP stream using pywaggle Camera and return image bytes."""
+    from io import BytesIO
+
+    with Camera(stream_uri) as camera:
+        for snapshot in camera.stream():
+            # Encode snapshot to JPEG bytes
+            image_bytes = BytesIO()
+            snapshot.save(image_bytes)
+            return image_bytes.getvalue()
 
 
-def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str]):
+def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str], stream_names: dict[str, str] = None, publish_image: bool = False):
     logging.info("Running: model=%r and prompt=%r", model, prompt)
 
     client = ollama.Client(host=host)
 
     logging.info("Ensuring model %r has been pulled.", model)
     client.pull(model)
+
+    if stream_names is None:
+        stream_names = {}
 
     for image in images:
         logging.info("Processing image: %s", image)
@@ -111,6 +97,13 @@ def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str]):
         logging.info("Publishing results: %s", output_json)
         plugin.publish("ollama_response", output_json)
 
+        # Publish the image if requested and it came from a stream.
+        if publish_image and image in stream_names:
+            stream_name = stream_names[image]
+            meta = {"camera": stream_name}
+            plugin.upload_file(image, meta=meta)
+            logging.info("Published image from stream %s", stream_name)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -127,9 +120,21 @@ if __name__ == "__main__":
         "-p", "--prompt", default="Describe this image.", help="prompt to use"
     )
     parser.add_argument(
-        "--use-lab-camera",
+        "--stream",
+        dest="stream",
+        action="append",
+        help="stream URI (e.g., rtsp://...) to process. Multiple streams can be specified (untested).",
+    )
+    parser.add_argument(
+        "--name",
+        dest="name",
+        action="append",
+        help="(optional) name for the stream. Count should match --stream if provided.",
+    )
+    parser.add_argument(
+        "--publish-image",
         action="store_true",
-        help="capture one frame from the lab RTSP camera and process it",
+        help="publish captured stream images to Beehive after processing",
     )
     parser.add_argument("images", nargs="*", help="images to process")
     args = parser.parse_args()
@@ -141,12 +146,21 @@ if __name__ == "__main__":
     )
 
     images = list(args.images)
+    stream_names = {}
 
-    if args.use_lab_camera:
-        images.append(LAB_CAMERA_RTSP_URL)
+    # Handle streams if provided.
+    if args.stream:
+        stream_list = args.stream if isinstance(args.stream, list) else [args.stream]
+        name_list = args.name if args.name else []
+
+        for i, stream_uri in enumerate(stream_list):
+            stream_name = name_list[i] if i < len(name_list) else stream_uri
+            logging.info("Capturing frame from stream %s (name: %s)", stream_uri, stream_name)
+            images.append(stream_uri)
+            stream_names[stream_uri] = stream_name
 
     if not images:
-        parser.error("Provide at least one image path or pass --use-lab-camera")
+        parser.error("Provide at least one image path or use --stream")
 
     with Plugin() as plugin:
         run(
@@ -155,4 +169,6 @@ if __name__ == "__main__":
             model=args.model,
             prompt=args.prompt,
             images=images,
+            stream_names=stream_names,
+            publish_image=args.publish_image,
         )
