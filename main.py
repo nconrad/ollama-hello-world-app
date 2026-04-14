@@ -1,6 +1,7 @@
 import argparse
 import ollama
 import json
+from typing import List, Dict, Optional
 from waggle.plugin import Plugin
 from waggle.data.vision import Camera
 import logging
@@ -47,7 +48,7 @@ def get_image_data_stream(stream_uri: str) -> bytes:
             return image_bytes.getvalue()
 
 
-def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str], stream_names: dict[str, str] = None, publish_image: bool = False):
+def run(plugin: Plugin, host: str, model: str, prompt: str, images: List[str], stream_names: Optional[Dict[str, str]] = None, publish_image: bool = False):
     logging.info("Running: model=%r and prompt=%r", model, prompt)
 
     client = ollama.Client(host=host)
@@ -62,6 +63,7 @@ def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str], s
         logging.info("Processing image: %s", image)
 
         raw_image_data = get_image_data(image)
+        logging.info("Image fetch successful, size: %d bytes", len(raw_image_data))
         encoded_image_data = base64.b64encode(raw_image_data).decode()
 
         # Run model on example.
@@ -75,6 +77,7 @@ def run(plugin: Plugin, host: str, model: str, prompt: str, images: list[str], s
                 },
             ],
         )
+        logging.info("Model response received")
 
         # Build output data.
         output = {
